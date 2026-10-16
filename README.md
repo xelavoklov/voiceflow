@@ -43,7 +43,7 @@ The first start downloads the selected model from Hugging Face
 (`large-v3-turbo` is about 1.6 GB; pick a smaller one in the menu if you prefer).
 
 ## Usage
-- **Left click** — start / stop recording. **Drag** — move the button.
+- **Left click** — start recording: the button expands into a pill with a live waveform. **✓** transcribes and pastes, **✕** discards the recording. **Drag** — move it.
 - **Right click** — model, dictation language, paste shortcut (use *Ctrl+Shift+V* in terminals), quit.
 - Settings are stored in `~/.config/voiceflow/config.json`.
 - Set `VOICEFLOW_DEBUG=1` to print what is pasted (off by default for privacy).

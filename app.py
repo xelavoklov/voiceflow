@@ -5,6 +5,7 @@ Click to start recording, click again to stop: speech is transcribed by a local
 whisper model and pasted where the cursor is. The window never takes focus, so
 the text lands in the application you were typing in.
 """
+import collections
 import fcntl
 import json
 import math
@@ -26,6 +27,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import GLib, Gdk, Gtk  # noqa: E402
 
+from array import array  # noqa: E402
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 WORKER = os.path.join(BASE, "worker.py")
 VENV_PY = os.path.join(BASE, ".venv", "bin", "python")
@@ -35,13 +38,16 @@ MODELS = ["large-v3-turbo", "medium", "small", "base"]
 LANGUAGES = [("Auto", None), ("Русский", "ru"), ("English", "en")]
 PASTE_MODES = [("Ctrl+V", ("ctrl", "v")), ("Ctrl+Shift+V", ("ctrl", "shift", "v"))]
 SIZE = 64
+PILL_W, PILL_H, BTN = 216, 56, 40  # recording pill: width, height, diameter of the ✕ / ✓ buttons
+BARS = 20
+ACCENT = (0.45, 0.32, 0.95)
 
 STRINGS = {
     "en": {
         "auto": "Auto", "model": "Model", "language": "Language", "paste": "Paste", "quit": "Quit",
         "terminals": "Ctrl+Shift+V (terminals)", "loading": "Loading model {model}…",
         "ready": "{model} ({device}): click to record", "error": "Error: {text}",
-        "pasted": "Pasted: {text}", "nothing": "No speech recognised", "recording": "Recording… click to stop",
+        "pasted": "Pasted: {text}", "nothing": "No speech recognised", "recording": "Recording… ✓ to paste, ✕ to cancel", "cancelled": "Cancelled",
         "too_short": "Too short", "busy": "Transcribing…", "worker_died": "transcription process failed",
         "no_venv": "No .venv found: run ./install.sh",
         "no_uinput": "uinput unavailable ({exc}): text will only be copied to the clipboard "
@@ -52,7 +58,7 @@ STRINGS = {
         "auto": "Авто", "model": "Модель", "language": "Язык", "paste": "Вставка", "quit": "Выход",
         "terminals": "Ctrl+Shift+V (терминалы)", "loading": "Загрузка модели {model}…",
         "ready": "{model} ({device}): клик — запись", "error": "Ошибка: {text}",
-        "pasted": "Вставлено: {text}", "nothing": "Речь не распознана", "recording": "Запись… клик — остановить",
+        "pasted": "Вставлено: {text}", "nothing": "Речь не распознана", "recording": "Запись… ✓ — вставить, ✕ — отмена", "cancelled": "Отменено",
         "too_short": "Слишком коротко", "busy": "Распознаю…", "worker_died": "процесс распознавания завершился с ошибкой",
         "no_venv": "Нет .venv: выполните ./install.sh",
         "no_uinput": "uinput недоступен ({exc}): текст будет только в буфере обмена "
@@ -174,6 +180,24 @@ class Recorder:
         )
         self.started = time.time()
 
+    def level(self):
+        """Loudness 0..1 of the last ~100 ms, read from the growing wav file (for the live waveform)."""
+        if time.time() - self.started < 0.45:  # the mic wake-up click would pin the meter
+            return 0.0
+        try:
+            size = os.path.getsize(self.path)
+            with open(self.path, "rb") as fh:
+                fh.seek(max(44, size - 3200))
+                buf = fh.read(3200)
+        except OSError:
+            return 0.0
+        samples = array("h")
+        samples.frombytes(buf[: len(buf) // 2 * 2])
+        if not samples:
+            return 0.0
+        rms = math.sqrt(sum(x * x for x in samples) / len(samples)) / 32768
+        return min(1.0, (rms / 0.06) ** 0.6)
+
     def stop(self):
         """Returns (path, duration)."""
         duration = time.time() - self.started
@@ -198,6 +222,9 @@ class Button(Gtk.Window):
         self.worker = None
         self.press = None
         self.dragging = False
+        self.action = None
+        self.circle_pos = None
+        self.levels = collections.deque([0.0] * BARS, maxlen=BARS)
 
         self.set_title("VoiceFlow")
         self.set_decorated(False)
@@ -206,7 +233,7 @@ class Button(Gtk.Window):
         self.set_skip_pager_hint(True)
         self.set_accept_focus(False)
         self.set_focus_on_map(False)
-        self.set_resizable(False)
+        self.set_resizable(True)  # size follows the drawing area; resize() is needed to shrink back
         self.set_default_size(SIZE, SIZE)
         self.stick()
         visual = self.get_screen().get_rgba_visual()
@@ -268,11 +295,17 @@ class Button(Gtk.Window):
 
     def tick(self):
         self.phase += 0.12
+        if self.state == self.RECORDING:
+            previous = self.levels[-1]
+            level = self.recorder.level()
+            self.levels.append(max(level, previous * 0.6))  # fast attack, soft decay
         if self.state in (self.RECORDING, self.BUSY, self.LOADING):
             self.area.queue_draw()
         return True
 
     def on_configure(self, _w, _e):
+        if self.state == self.RECORDING:  # the pill is only a temporary shape
+            return False
         x, y = self.get_position()
         self.cfg["x"], self.cfg["y"] = x, y
         return False
@@ -286,19 +319,41 @@ class Button(Gtk.Window):
         Gtk.main_quit()
 
     # --- запись и вставка -------------------------------------------------
-    def toggle(self):
-        if self.state == self.IDLE:
-            self.recorder.start()
-            self.set_state(self.RECORDING, T["recording"])
-        elif self.state == self.RECORDING:
-            path, duration = self.recorder.stop()
-            if duration < 0.4:
-                os.unlink(path)
-                self.set_state(self.IDLE, T["too_short"])
-                return
-            self.set_state(self.BUSY, T["busy"])
-            self.worker.transcribe(path, self.cfg["language"])
-            GLib.timeout_add_seconds(30, lambda: os.path.exists(path) and os.unlink(path) and False)
+    def reshape(self, pill):
+        """Switch between the round button and the recording pill, keeping the same centre."""
+        w, h = (PILL_W, PILL_H) if pill else (SIZE, SIZE)
+        x, y = self.get_position()
+        if pill:
+            self.circle_pos = (x, y)
+            nx, ny = x + (SIZE - w) // 2, y + (SIZE - h) // 2
+            monitor = Gdk.Display.get_default().get_monitor_at_point(x, y).get_geometry()
+            nx = max(monitor.x, min(nx, monitor.x + monitor.width - w))
+        else:
+            nx, ny = self.circle_pos or (x, y)
+        self.area.set_size_request(w, h)
+        self.resize(w, h)
+        self.move(nx, ny)
+
+    def start_recording(self):
+        self.recorder.start()
+        self.levels.extend([0.0] * BARS)
+        self.set_state(self.RECORDING, T["recording"])
+        self.reshape(True)
+
+    def finish_recording(self, confirm):
+        path, duration = self.recorder.stop()
+        self.reshape(False)
+        if not confirm:
+            os.unlink(path)
+            self.set_state(self.IDLE, T["cancelled"])
+            return
+        if duration < 0.4:
+            os.unlink(path)
+            self.set_state(self.IDLE, T["too_short"])
+            return
+        self.set_state(self.BUSY, T["busy"])
+        self.worker.transcribe(path, self.cfg["language"])
+        GLib.timeout_add_seconds(30, lambda: os.path.exists(path) and os.unlink(path) and False)
 
     def paste(self, text):
         old = None
@@ -323,7 +378,17 @@ class Button(Gtk.Window):
         if ev.button == 1:
             self.press = (ev.x_root, ev.y_root)
             self.dragging = False
+            self.action = self.hit(ev.x, ev.y)
         return True
+
+    def hit(self, x, y):
+        """What a click at (x, y) means: 'start' | 'cancel' | 'confirm' | None."""
+        if self.state == self.RECORDING:
+            for name, cx in (("cancel", 8 + BTN / 2), ("confirm", PILL_W - 8 - BTN / 2)):
+                if math.hypot(x - cx, y - PILL_H / 2) <= BTN / 2 + 2:
+                    return name
+            return None
+        return "start" if self.state == self.IDLE else None
 
     def on_motion(self, _w, ev):
         if self.press and not self.dragging:
@@ -333,8 +398,11 @@ class Button(Gtk.Window):
         return True
 
     def on_release(self, _w, ev):
-        if ev.button == 1 and self.press and not self.dragging:
-            self.toggle()
+        if ev.button == 1 and self.press and not self.dragging and self.action == self.hit(ev.x, ev.y):
+            if self.action == "start":
+                self.start_recording()
+            elif self.action in ("cancel", "confirm"):
+                self.finish_recording(self.action == "confirm")
         self.press = None
         return True
 
@@ -384,6 +452,8 @@ class Button(Gtk.Window):
         cr.set_operator(0)  # CLEAR
         cr.paint()
         cr.set_operator(2)  # OVER
+        if self.state == self.RECORDING:
+            return self.draw_pill(cr)
         cx = cy = SIZE / 2
         r = SIZE / 2 - 4
         colors = {
@@ -430,6 +500,63 @@ class Button(Gtk.Window):
             cr.line_to(cx, cy + 15)
             cr.stroke()
         return False
+
+
+def _rounded_rect(cr, x, y, w, h, r):
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def _draw_pill(self, cr):
+    w, h = PILL_W, PILL_H
+    cr.set_source_rgba(0, 0, 0, 0.35)  # shadow
+    _rounded_rect(cr, 3, 4, w - 6, h - 6, (h - 6) / 2)
+    cr.fill()
+    cr.set_source_rgba(0.12, 0.12, 0.14, 0.97)
+    _rounded_rect(cr, 3, 3, w - 6, h - 6, (h - 6) / 2)
+    cr.fill()
+
+    cy = h / 2
+    cancel_x, confirm_x = 8 + BTN / 2, w - 8 - BTN / 2
+    cr.set_source_rgb(0.30, 0.30, 0.34)  # cancel button
+    cr.arc(cancel_x, cy, BTN / 2 - 2, 0, 2 * math.pi)
+    cr.fill()
+    cr.set_source_rgb(*ACCENT)  # confirm button
+    cr.arc(confirm_x, cy, BTN / 2 - 2, 0, 2 * math.pi)
+    cr.fill()
+
+    cr.set_source_rgb(1, 1, 1)
+    cr.set_line_width(2.6)
+    cr.set_line_cap(1)
+    cr.set_line_join(1)
+    d = 6
+    cr.move_to(cancel_x - d, cy - d)
+    cr.line_to(cancel_x + d, cy + d)
+    cr.move_to(cancel_x + d, cy - d)
+    cr.line_to(cancel_x - d, cy + d)
+    cr.stroke()
+    cr.move_to(confirm_x - 7, cy + 0.5)
+    cr.line_to(confirm_x - 2, cy + 5.5)
+    cr.line_to(confirm_x + 7, cy - 5)
+    cr.stroke()
+
+    x0, x1 = BTN + 18, w - BTN - 18  # live waveform
+    pitch = (x1 - x0) / BARS
+    cr.set_line_width(pitch * 0.5)
+    for i, level in enumerate(self.levels):
+        half = 2 + level * (h / 2 - 12)
+        x = x0 + pitch * (i + 0.5)
+        cr.move_to(x, cy - half)
+        cr.line_to(x, cy + half)
+        cr.stroke()
+    return False
+
+
+Button.draw_pill = _draw_pill
 
 
 def main():
