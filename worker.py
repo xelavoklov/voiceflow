@@ -39,7 +39,17 @@ def read_wav(path):
         data = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16)
         if wav.getnchannels() > 1:
             data = data.reshape(-1, wav.getnchannels()).mean(axis=1)
-    return data.astype(np.float32) / 32768.0
+    audio = data.astype(np.float32) / 32768.0
+    return trim_wake_transient(audio)
+
+
+def trim_wake_transient(audio, window=320, limit=9600, threshold=0.1):
+    """Микрофон при выходе из сна даёт скачок постоянной составляющей (~0.3 с, сигнал в максимуме).
+    Он сбивает модель, поэтому отрезаем начало, пока среднее окна не вернётся к нулю."""
+    start = 0
+    while start < min(len(audio), limit) and abs(audio[start : start + window].mean()) > threshold:
+        start += window
+    return audio[start:]
 
 
 def load_model(name):
