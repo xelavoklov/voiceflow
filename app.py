@@ -1,9 +1,9 @@
 #!/usr/bin/python3
-"""VoiceFlow: плавающая кнопка диктовки для Ubuntu (GNOME/Wayland).
+"""VoiceFlow: floating dictation button for Ubuntu (GNOME/Wayland).
 
-Клик по кнопке начинает запись, второй клик останавливает, распознаёт речь
-локальной моделью whisper и вставляет текст туда, где стоит курсор.
-Окно не забирает фокус, поэтому вставка попадает в нужное приложение.
+Click to start recording, click again to stop: speech is transcribed by a local
+whisper model and pasted where the cursor is. The window never takes focus, so
+the text lands in the application you were typing in.
 """
 import fcntl
 import json
@@ -18,7 +18,7 @@ import tempfile
 import threading
 import time
 
-os.environ.setdefault("GDK_BACKEND", "x11")  # XWayland: keep-above и no-focus работают в mutter
+os.environ.setdefault("GDK_BACKEND", "x11")  # XWayland: keep-above and no-focus work in mutter
 
 import gi
 
@@ -32,9 +32,37 @@ VENV_PY = os.path.join(BASE, ".venv", "bin", "python")
 CONFIG_PATH = os.path.expanduser("~/.config/voiceflow/config.json")
 
 MODELS = ["large-v3-turbo", "medium", "small", "base"]
-LANGUAGES = [("Авто", None), ("Русский", "ru"), ("English", "en")]
-PASTE_MODES = [("Ctrl+V", ("ctrl", "v")), ("Ctrl+Shift+V (терминалы)", ("ctrl", "shift", "v"))]
+LANGUAGES = [("Auto", None), ("Русский", "ru"), ("English", "en")]
+PASTE_MODES = [("Ctrl+V", ("ctrl", "v")), ("Ctrl+Shift+V", ("ctrl", "shift", "v"))]
 SIZE = 64
+
+STRINGS = {
+    "en": {
+        "auto": "Auto", "model": "Model", "language": "Language", "paste": "Paste", "quit": "Quit",
+        "terminals": "Ctrl+Shift+V (terminals)", "loading": "Loading model {model}…",
+        "ready": "{model} ({device}): click to record", "error": "Error: {text}",
+        "pasted": "Pasted: {text}", "nothing": "No speech recognised", "recording": "Recording… click to stop",
+        "too_short": "Too short", "busy": "Transcribing…", "worker_died": "transcription process failed",
+        "no_venv": "No .venv found: run ./install.sh",
+        "no_uinput": "uinput unavailable ({exc}): text will only be copied to the clipboard "
+                     "(see contrib/70-voiceflow-uinput.rules)",
+        "missing": "Missing required tools: {tools}",
+    },
+    "ru": {
+        "auto": "Авто", "model": "Модель", "language": "Язык", "paste": "Вставка", "quit": "Выход",
+        "terminals": "Ctrl+Shift+V (терминалы)", "loading": "Загрузка модели {model}…",
+        "ready": "{model} ({device}): клик — запись", "error": "Ошибка: {text}",
+        "pasted": "Вставлено: {text}", "nothing": "Речь не распознана", "recording": "Запись… клик — остановить",
+        "too_short": "Слишком коротко", "busy": "Распознаю…", "worker_died": "процесс распознавания завершился с ошибкой",
+        "no_venv": "Нет .venv: выполните ./install.sh",
+        "no_uinput": "uinput недоступен ({exc}): текст будет только в буфере обмена "
+                     "(см. contrib/70-voiceflow-uinput.rules)",
+        "missing": "Не найдены нужные программы: {tools}",
+    },
+}
+_lang = (os.environ.get("LC_ALL") or os.environ.get("LC_MESSAGES") or os.environ.get("LANG") or "en")[:2]
+T = STRINGS.get(_lang, STRINGS["en"])
+DEBUG = bool(os.environ.get("VOICEFLOW_DEBUG"))
 
 DEFAULTS = {"model": "large-v3-turbo", "language": "ru", "paste": 0, "x": None, "y": None}
 
@@ -54,7 +82,7 @@ def save_config(cfg):
 
 
 class VirtualKeyboard:
-    """Виртуальная клавиатура через /dev/uinput (на Wayland другого способа нет)."""
+    """Virtual keyboard through /dev/uinput (the only generic way to type on Wayland)."""
 
     KEYS = {"ctrl": 29, "shift": 42, "v": 47}
     UI_SET_EVBIT = 0x40045564
@@ -71,7 +99,7 @@ class VirtualKeyboard:
         dev = struct.pack("80sHHHHI", name, 0x03, 0x1234, 0x5678, 1, 0) + b"\0" * (4 * 64 * 4)
         os.write(self.fd, dev)
         fcntl.ioctl(self.fd, self.UI_DEV_CREATE)
-        time.sleep(0.3)  # композитор должен успеть увидеть устройство
+        time.sleep(0.3)  # the compositor needs a moment to notice the device
 
     def _emit(self, etype, code, value):
         sec, usec = divmod(time.time(), 1)
@@ -91,7 +119,7 @@ class VirtualKeyboard:
 
 
 class Worker:
-    """Обёртка над процессом worker.py (модель живёт в отдельном venv)."""
+    """Wrapper around worker.py (the model lives in a separate venv)."""
 
     def __init__(self, model, on_ready, on_result, on_error):
         self.model = model
@@ -118,7 +146,7 @@ class Worker:
             else:
                 GLib.idle_add(self.on_result, msg.get("text", ""))
         if self.proc.poll() not in (None, 0, -signal.SIGTERM):
-            GLib.idle_add(self.on_error, "процесс распознавания завершился с ошибкой")
+            GLib.idle_add(self.on_error, T["worker_died"])
 
     def transcribe(self, path, language):
         self.proc.stdin.write(json.dumps({"audio": path, "language": language}) + "\n")
@@ -147,9 +175,9 @@ class Recorder:
         self.started = time.time()
 
     def stop(self):
-        """Возвращает (путь, длительность)."""
+        """Returns (path, duration)."""
         duration = time.time() - self.started
-        self.proc.send_signal(signal.SIGINT)  # pw-record дописывает wav-заголовок по SIGINT
+        self.proc.send_signal(signal.SIGINT)  # pw-record finalises the wav header on SIGINT
         try:
             self.proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
@@ -197,14 +225,13 @@ class Button(Gtk.Window):
         self.area.connect("motion-notify-event", self.on_motion)
         self.add(self.area)
         self.connect("destroy", self.quit)
-        self.connect("focus-in-event", lambda *_: print("[voiceflow] ОКНО КНОПКИ ПОЛУЧИЛО ФОКУС", file=sys.stderr, flush=True))
         self.connect("configure-event", self.on_configure)
 
         try:
             self.keyboard = VirtualKeyboard()
         except OSError as exc:
             self.keyboard = None
-            print(f"[voiceflow] uinput недоступен ({exc}): текст будет только в буфере обмена", file=sys.stderr)
+            print("[voiceflow] " + T["no_uinput"].format(exc=exc), file=sys.stderr)
 
         self.show_all()
         if self.cfg["x"] is not None:
@@ -216,20 +243,20 @@ class Button(Gtk.Window):
     def start_worker(self):
         if self.worker:
             self.worker.stop()
-        self.set_state(self.LOADING, f"Загрузка модели {self.cfg['model']}…")
+        self.set_state(self.LOADING, T["loading"].format(model=self.cfg["model"]))
         self.worker = Worker(self.cfg["model"], self.on_ready, self.on_result, self.on_error)
 
     def on_ready(self, msg):
-        self.set_state(self.IDLE, f"{msg['model']} ({msg['device']}): клик — запись")
+        self.set_state(self.IDLE, T["ready"].format(model=msg["model"], device=msg["device"]))
 
     def on_error(self, text):
-        print(f"[voiceflow] ошибка: {text}", file=sys.stderr)
-        self.set_state(self.IDLE, f"Ошибка: {text}")
+        print(f"[voiceflow] error: {text}", file=sys.stderr)
+        self.set_state(self.IDLE, T["error"].format(text=text))
         if shutil.which("notify-send"):
             subprocess.Popen(["notify-send", "VoiceFlow", text])
 
     def on_result(self, text):
-        self.set_state(self.IDLE, f"Вставлено: {text[:60]}" if text else "Речь не распознана")
+        self.set_state(self.IDLE, T["pasted"].format(text=text[:60]) if text else T["nothing"])
         if text:
             self.paste(text)
 
@@ -262,14 +289,14 @@ class Button(Gtk.Window):
     def toggle(self):
         if self.state == self.IDLE:
             self.recorder.start()
-            self.set_state(self.RECORDING, "Запись… клик — остановить")
+            self.set_state(self.RECORDING, T["recording"])
         elif self.state == self.RECORDING:
             path, duration = self.recorder.stop()
             if duration < 0.4:
                 os.unlink(path)
-                self.set_state(self.IDLE, "Слишком коротко")
+                self.set_state(self.IDLE, T["too_short"])
                 return
-            self.set_state(self.BUSY, "Распознаю…")
+            self.set_state(self.BUSY, T["busy"])
             self.worker.transcribe(path, self.cfg["language"])
             GLib.timeout_add_seconds(30, lambda: os.path.exists(path) and os.unlink(path) and False)
 
@@ -280,9 +307,9 @@ class Button(Gtk.Window):
             if "text/plain" in types:
                 old = subprocess.run(["wl-paste", "--no-newline"], capture_output=True).stdout
         subprocess.run(["wl-copy"], input=text.encode())
-        time.sleep(0.15)  # дать композитору принять новое содержимое буфера
-        print(f"[voiceflow] вставка: {text!r}, keyboard={bool(self.keyboard)}, focus={self.has_toplevel_focus()}",
-              file=sys.stderr, flush=True)
+        time.sleep(0.15)  # give the compositor time to accept the new clipboard contents
+        if DEBUG:
+            print(f"[voiceflow] paste: {text!r}, keyboard={bool(self.keyboard)}", file=sys.stderr, flush=True)
         if self.keyboard:
             self.keyboard.chord(PASTE_MODES[self.cfg["paste"]][1])
         if old is not None:
@@ -327,13 +354,12 @@ class Button(Gtk.Window):
                 menu.append(item)
             menu.append(Gtk.SeparatorMenuItem())
 
-        radio_group("Модель", [(m, m) for m in MODELS], MODELS.index(self.cfg["model"]), self.set_model)
+        radio_group(T["model"], [(m, m) for m in MODELS], MODELS.index(self.cfg["model"]), self.set_model)
         langs = [l for _, l in LANGUAGES]
-        radio_group("Язык", LANGUAGES, langs.index(self.cfg["language"]), self.set_language)
-        radio_group(
-            "Вставка", [(n, i) for i, (n, _) in enumerate(PASTE_MODES)], self.cfg["paste"], self.set_paste
-        )
-        quit_item = Gtk.MenuItem(label="Выход")
+        radio_group(T["language"], [(T["auto"] if l is None else n, l) for n, l in LANGUAGES], langs.index(self.cfg["language"]), self.set_language)
+        paste_items = [("Ctrl+V", 0), (T["terminals"], 1)]
+        radio_group(T["paste"], paste_items, self.cfg["paste"], self.set_paste)
+        quit_item = Gtk.MenuItem(label=T["quit"])
         quit_item.connect("activate", self.quit)
         menu.append(quit_item)
         menu.show_all()
@@ -372,7 +398,7 @@ class Button(Gtk.Window):
             cr.set_source_rgba(red, green, blue, 0.25 * pulse)
             cr.arc(cx, cy, r + 3 * pulse, 0, 2 * math.pi)
             cr.fill()
-        cr.set_source_rgba(0, 0, 0, 0.35)  # тень
+        cr.set_source_rgba(0, 0, 0, 0.35)  # shadow
         cr.arc(cx, cy + 1.5, r, 0, 2 * math.pi)
         cr.fill()
         cr.set_source_rgb(red, green, blue)
@@ -380,12 +406,12 @@ class Button(Gtk.Window):
         cr.fill()
 
         cr.set_source_rgb(1, 1, 1)
-        if self.state in (self.BUSY, self.LOADING):  # крутилка
+        if self.state in (self.BUSY, self.LOADING):  # spinner
             cr.set_line_width(4)
             cr.set_line_cap(1)
             cr.arc(cx, cy, 11, self.phase, self.phase + 4.2)
             cr.stroke()
-        else:  # микрофон
+        else:  # microphone
             cr.set_line_width(3)
             cr.set_line_cap(1)
             cr.save()
@@ -409,8 +435,11 @@ class Button(Gtk.Window):
 def main():
     GLib.set_prgname("voiceflow")
     GLib.set_application_name("VoiceFlow")
+    missing = [t for t in ("pw-record", "wl-copy") if not shutil.which(t)]
+    if missing:
+        sys.exit(T["missing"].format(tools=", ".join(missing)))
     if not os.path.exists(VENV_PY):
-        sys.exit("Нет .venv: выполните ./install.sh")
+        sys.exit(T["no_venv"])
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     Button()
     Gtk.main()

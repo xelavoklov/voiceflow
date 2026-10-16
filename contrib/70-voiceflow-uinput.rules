@@ -1,0 +1,4 @@
+# Lets the logged-in desktop user create virtual input devices (needed to press Ctrl+V).
+# Install:  sudo cp contrib/70-voiceflow-uinput.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload && sudo udevadm trigger /dev/uinput
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
