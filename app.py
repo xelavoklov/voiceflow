@@ -195,7 +195,8 @@ class Recorder:
         samples.frombytes(buf[: len(buf) // 2 * 2])
         if not samples:
             return 0.0
-        rms = math.sqrt(sum(x * x for x in samples) / len(samples)) / 32768
+        mean = sum(samples) / len(samples)  # drop the DC offset some sound cards have
+        rms = math.sqrt(sum((x - mean) ** 2 for x in samples) / len(samples)) / 32768
         return min(1.0, (rms / 0.06) ** 0.6)
 
     def stop(self):
