@@ -18,7 +18,7 @@
 ./install.sh          # или ./install.sh --cuda, если нужны CUDA-библиотеки из pip
 ./run.sh
 ```
-Автозапуск: скопировать `voiceflow.desktop` в `~/.config/autostart/`.
+Ярлык в меню приложений: `./install-desktop.sh`. Автозапуск: скопировать `~/.local/share/applications/voiceflow.desktop` в `~/.config/autostart/`.
 
 ## Использование
 - Левая кнопка: запись / стоп. Перетаскивание — переместить кнопку.

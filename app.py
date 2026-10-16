@@ -401,6 +401,8 @@ class Button(Gtk.Window):
 
 
 def main():
+    GLib.set_prgname("voiceflow")
+    GLib.set_application_name("VoiceFlow")
     if not os.path.exists(VENV_PY):
         sys.exit("Нет .venv: выполните ./install.sh")
     signal.signal(signal.SIGINT, signal.SIG_DFL)
