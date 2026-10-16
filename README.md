@@ -33,14 +33,26 @@ where your cursor is, in any application.
 
 ## Install
 ```
-git clone https://github.com/<you>/voiceflow && cd voiceflow
-./install.sh            # CPU, or GPU if cuBLAS 12 + cuDNN 9 are already on the system
-./install.sh --cuda     # alternatively: also download CUDA libraries from pip (~1 GB)
-./run.sh
-./install-desktop.sh    # optional: add a launcher and icon to the application menu
+git clone https://github.com/xelavoklov/voiceflow
+cd voiceflow
+./setup.sh
 ```
-The first start downloads the selected model from Hugging Face
-(`large-v3-turbo` is about 1.6 GB; pick a smaller one in the menu if you prefer).
+`setup.sh` installs the system packages (`apt`, asks for sudo), `uv` if missing, the udev rule for `/dev/uinput`,
+the transcription environment and an application-menu launcher with the icon. If an NVIDIA GPU is found it offers to
+download the CUDA libraries (~1 GB). Options: `--yes` (no questions), `--no-cuda`, `--dry-run` (print only).
+
+Then start VoiceFlow from the application menu, or run `./run.sh`. The first launch downloads the selected model from
+Hugging Face (`large-v3-turbo` is about 1.6 GB; pick a smaller one in the menu if you prefer).
+
+<details><summary>Manual install</summary>
+
+```
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 pipewire-bin wl-clipboard
+./install.sh            # or ./install.sh --cuda
+./install-desktop.sh    # launcher + icon
+./run.sh
+```
+</details>
 
 ## Usage
 - **Left click** — start recording: the button expands into a pill with a live waveform. **✓** transcribes and pastes, **✕** discards the recording. **Drag** — move it.
@@ -71,6 +83,6 @@ MIT
 Плавающая кнопка диктовки для Ubuntu (GNOME/Wayland), аналог Wispr Flow, полностью офлайн.
 Клик — запись, ещё клик — распознавание локальной моделью whisper и вставка текста туда, где стоит курсор.
 
-Установка: `./install.sh`, затем `./run.sh` (ярлык в меню — `./install-desktop.sh`).
+Установка: `./setup.sh` (пакеты, uv, правило udev, окружение, ярлык в меню), затем запуск из меню или `./run.sh`.
 Для вставки нужен доступ к `/dev/uinput` (правило udev в `contrib/`). Правая кнопка мыши — модель, язык, режим вставки.
 Интерфейс автоматически русский, если системная локаль русская.
