@@ -2,6 +2,8 @@
 
 # VoiceFlow
 
+<p align="center"><img src="assets/hero.png" width="640" alt="VoiceFlow recording pill over a text editor"></p>
+
 A floating dictation button for Ubuntu (GNOME on Wayland) — a [Wispr Flow](https://wisprflow.ai)-style
 tool that runs fully offline. Click the button, speak, click again: the text is typed
 where your cursor is, in any application.
@@ -12,6 +14,11 @@ where your cursor is, in any application.
 - Russian and English UI, any Whisper language for dictation
 
 > Status: early alpha. Tested on Ubuntu 26.04, GNOME Shell 50, Wayland, NVIDIA GPU.
+
+## States
+<p align="center"><img src="assets/states.png" width="640" alt="Loading, ready, recording and transcribing states"></p>
+
+*Images are rendered by `tools/make_screenshots.py` with the app's own drawing code.*
 
 ## How it works
 | Step | Mechanism |
