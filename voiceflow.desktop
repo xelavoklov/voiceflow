@@ -2,7 +2,7 @@
 Type=Application
 Name=VoiceFlow
 Comment=Диктовка в любое поле ввода
-Exec=/usr/bin/python3 %h/voiceflow/app.py
+Exec=%h/voiceflow/run.sh
 Icon=audio-input-microphone
 Terminal=false
 Categories=Utility;

@@ -27,6 +27,21 @@ def preload_cuda_libs():
                     pass
 
 
+def read_wav(path):
+    """16-бит PCM wav -> float32 [-1, 1]; записи уже 16 кГц моно, PyAV не нужен."""
+    import wave
+
+    import numpy as np
+
+    with wave.open(path, "rb") as wav:
+        if wav.getsampwidth() != 2 or wav.getframerate() != 16000:
+            raise ValueError("ожидается 16-бит wav 16 кГц")
+        data = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16)
+        if wav.getnchannels() > 1:
+            data = data.reshape(-1, wav.getnchannels()).mean(axis=1)
+    return data.astype(np.float32) / 32768.0
+
+
 def load_model(name):
     from faster_whisper import WhisperModel
 
@@ -56,7 +71,7 @@ def main():
         try:
             req = json.loads(line)
             segments, _info = model.transcribe(
-                req["audio"],
+                read_wav(req["audio"]),
                 language=req.get("language"),
                 vad_filter=True,
                 beam_size=5,
