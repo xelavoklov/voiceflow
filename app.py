@@ -36,7 +36,7 @@ LANGUAGES = [("Авто", None), ("Русский", "ru"), ("English", "en")]
 PASTE_MODES = [("Ctrl+V", ("ctrl", "v")), ("Ctrl+Shift+V (терминалы)", ("ctrl", "shift", "v"))]
 SIZE = 64
 
-DEFAULTS = {"model": "large-v3-turbo", "language": None, "paste": 0, "x": None, "y": None}
+DEFAULTS = {"model": "large-v3-turbo", "language": "ru", "paste": 0, "x": None, "y": None}
 
 
 def load_config():
@@ -81,11 +81,13 @@ class VirtualKeyboard:
         codes = [self.KEYS[k] for k in keys]
         for code in codes:
             self._emit(1, code, 1)
-        self._emit(0, 0, 0)
-        time.sleep(0.03)
+            self._emit(0, 0, 0)
+            time.sleep(0.02)
+        time.sleep(0.05)
         for code in reversed(codes):
             self._emit(1, code, 0)
-        self._emit(0, 0, 0)
+            self._emit(0, 0, 0)
+            time.sleep(0.02)
 
 
 class Worker:
@@ -195,6 +197,7 @@ class Button(Gtk.Window):
         self.area.connect("motion-notify-event", self.on_motion)
         self.add(self.area)
         self.connect("destroy", self.quit)
+        self.connect("focus-in-event", lambda *_: print("[voiceflow] ОКНО КНОПКИ ПОЛУЧИЛО ФОКУС", file=sys.stderr, flush=True))
         self.connect("configure-event", self.on_configure)
 
         try:
@@ -277,6 +280,9 @@ class Button(Gtk.Window):
             if "text/plain" in types:
                 old = subprocess.run(["wl-paste", "--no-newline"], capture_output=True).stdout
         subprocess.run(["wl-copy"], input=text.encode())
+        time.sleep(0.15)  # дать композитору принять новое содержимое буфера
+        print(f"[voiceflow] вставка: {text!r}, keyboard={bool(self.keyboard)}, focus={self.has_toplevel_focus()}",
+              file=sys.stderr, flush=True)
         if self.keyboard:
             self.keyboard.chord(PASTE_MODES[self.cfg["paste"]][1])
         if old is not None:
