@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=VoiceFlow
+Comment=Диктовка в любое поле ввода
+Exec=/usr/bin/python3 %h/voiceflow/app.py
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;
