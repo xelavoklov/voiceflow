@@ -13,7 +13,7 @@ Comment=Диктовка в любое поле ввода
 Exec=$ROOT/run.sh
 Icon=voiceflow
 Terminal=false
-Categories=Utility;AudioVideo;
+Categories=Utility;
 StartupWMClass=voiceflow
 EOF
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
